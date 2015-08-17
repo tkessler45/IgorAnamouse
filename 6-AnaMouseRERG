@@ -1,0 +1,165 @@
+#pragma rtGlobals=1		// Use modern global access method.
+
+//Menu "|| ERG ||"
+//	"Import", ERGImport()
+//	"-"
+//	"<ICut  0.2  1", ERGcutwaves(0.2,1)
+//	"<ICut  0.5  1", ERGcutwaves(0.5,1)
+//	"<ICut  1.0  1", ERGcutwaves(1,1)
+//	"-"
+//	"<ICut  0.2  2", ERGcutwaves(0.2,2)
+//	"<ICut  0.5  2", ERGcutwaves(0.5,2)
+//	"<ICut  1.0  2", ERGcutwaves(1,2)
+//	"-"
+//	"<ICut  0.2  4", ERGcutwaves(0.2,4)
+//	"<ICut  0.5  4", ERGcutwaves(0.5,4)
+//	"<ICut  1.0  4", ERGcutwaves(1,4)
+//	"-"
+//	"<ICut  0.2  8", ERGcutwaves(0.2,8)
+//	"<ICut  0.5  8", ERGcutwaves(0.5,8)
+//	"<ICut  1.0  8", ERGcutwaves(1,8)
+//End
+
+function removeNAN(name)
+	WAVE name
+	
+	variable i=0
+	for(i=0;i<numpnts(name);i+=1)
+		if(numtype(name[i])==2)
+			deletepoints i,1, name
+		endif
+	endfor
+end
+
+function ERGimport()
+	string set
+	
+	setdatafolder root:
+	LoadWave/Q/G/D/O/N=wave ""
+	set=S_FileName
+	set=replacestring("-",set,"_") //replace dashes
+	set=replacestring("+",set,"plus") //replace plus
+	set=replacestring(" ",set,"") //remove spaces
+	set=replacestring("/",set,"") //remove forward slash
+	set=replacestring("\\",set,"") //remove backslash
+	set=replacestring(".txt",set,"")
+	NewDataFolder/O/S $(set)
+	
+	SetScale/P x 0,0.0005, "S", root:wave0, root:wave1
+	duplicate/o root:wave0 $("fulldata")
+	duplicate/o root:wave1 $("fullstim")
+	killwaves root:wave0 root:wave1
+//	display $("fullstim") $("fulldata")
+end
+
+function ERGcutwaves(base,resp)
+	variable base	//amount of baseline (s) to include before stimulation
+	variable resp	//amount of response (s) to include after stimulation
+	WAVE ref=fullstim	//stimulation key or indexing wave
+	WAVE data=fulldata	//data wave
+	
+	// get ref baseline
+//	variable baseline = mean(ref,0,1000) //half a second
+//	variable thresh = baseline+1
+	
+	if(stringmatch(getdatafolder(1),"root:"))
+		print "Please set current data folder"
+	else
+		//setup
+		killwaves/z listref
+		
+		//build array of stim points
+		make/o stimloc
+		findlevels/Q/D=stimloc/EDGE=1/P ref, mean(ref,0,1000)+1 //thresh
+//		stimloc=floor(stimloc) //not needed because wave values are truncated
+
+		//make new waves from ref and data
+		variable i
+		for(i=0;i<V_LevelsFound;i+=1)
+			duplicate/o/r=(pnt2x(ref,stimloc[i])-base,pnt2x(ref,stimloc[i])+resp) ref $("Stim"+num2str(i))
+			duplicate/o/r=(pnt2x(data,stimloc[i])-base,pnt2x(data,stimloc[i])+resp) data $("Resp"+num2str(i))
+			SetScale/P x -base,0.0005,"S", $("Stim"+num2str(i)), $("Resp"+num2str(i))
+		endfor
+		
+		stimloc=1
+		rename stimloc listref
+		
+		ERGaverage(V_LevelsFound)
+	endif
+end
+
+function ERGaverage(num)
+//	string folder //comon name of wave series to average
+	variable num //from list of waves in future...iterate through list and include referenced waves in average
+	
+//	setdatafolder root:$(folder)
+	duplicate/o $("Resp"+num2str(0)) $("Respavg")
+	WAVE avg=$("Respavg")
+	WAVE listref=listref
+	avg=0
+	
+	variable i
+	for(i=0;i<num;i+=1)
+		if(listref[i])
+			WAVE next=$("Resp"+num2str(i))
+			avg+=next
+		endif
+	endfor
+	avg/=num
+	
+	montage()
+end
+
+function montage()
+	setdatafolder root:
+	DoWindow averages
+	if(V_Flag)
+		DoWindow/K averages
+	endif
+	
+	string folders=stringbykey("FOLDERS",datafolderdir(1))
+	folders=removefromlist("globals",folders,",")
+	folders=removefromlist("Packages",folders,",")
+
+	variable i
+	for(i=0;i<itemsinlist(folders,",");i+=1)
+		duplicate/o root:$(stringfromlist(i,folders,",")):dataavg root:$(stringfromlist(i,folders,",")):$("Respavg"+num2str(i))
+		DoWindow averages
+		if(V_flag)
+			appendtograph/w=averages root:$(stringfromlist(i,folders,",")):$("Respavg"+num2str(i))
+		else
+			display/n=averages root:$(stringfromlist(i,folders,",")):$("Respavg"+num2str(i))
+		endif
+		ModifyGraph/w=averages rgb($("Respavg"+num2str(i)))=(0+round(65535*(i/(itemsinlist(folders,",")-1))),0,0)
+	endfor
+end
+
+function Amax()
+	WAVE wavenm=csrwaveref(A)
+//	print nameofwave(wavenm)
+//	print getwavesdatafolder(wavenm, 2)
+//	print wavemin(wavenm, xcsr(A), xcsr(B))
+
+	wavestats/Q/R=(-.05,0) wavenm	
+	variable wmin=wavemin(wavenm, xcsr(A), xcsr(B))
+	if(wmin==vcsr(A) || wmin==vcsr(B))
+		print "Place cursors around A-wave"
+	else	
+		print abs(wavemin(wavenm, xcsr(A), xcsr(B))-mean(wavenm, x2pnt(wavenm,-.05),x2pnt(wavenm,0)))-V_sdev //2 std deviations
+	endif
+end
+
+function Bmax()
+	WAVE wavenm=csrwaveref(A)
+//	print nameofwave(wavenm)
+//	print getwavesdatafolder(wavenm, 2)
+//	print wavemin(wavenm, xcsr(A), xcsr(B))
+	
+	wavestats/Q/R=(-.05,0) wavenm
+	variable wmax=wavemax(wavenm, xcsr(A), xcsr(B))
+	if(wmax==vcsr(A) || wmax==vcsr(B))
+		print "Place cursors around B-wave"
+	else	
+		print abs(wavemax(wavenm, xcsr(A), xcsr(B))-mean(wavenm, x2pnt(wavenm,-.05),x2pnt(wavenm,0)))-V_sdev //2 std deviations
+	endif
+end
